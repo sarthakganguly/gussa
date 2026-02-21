@@ -27,34 +27,14 @@ router.post('/signup', async (req, res) => {
     // Hash password
     const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
-    // Create user
-    const newUserResult = await query(
-      'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
+    // Create user and mark as verified
+    await query(
+      'INSERT INTO users (username, email, password_hash, is_verified) VALUES ($1, $2, $3, true)',
       [username, email, passwordHash]
     );
-    const userId = newUserResult.rows[0].id;
-
-    // Create verification token
-    const verificationToken = generateRandomString(32);
-    const tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-
-    await query(
-      'INSERT INTO email_verification_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)',
-      [userId, verificationToken, tokenExpires]
-    );
-
-    // Send verification email
-    const verificationUrl = `${process.env.APP_URL}/verify-email?token=${verificationToken}`;
-    const emailPreviewUrl = await sendEmail({
-      to: email,
-      subject: 'Verify Your Email Address',
-      text: `Please verify your email by clicking this link: ${verificationUrl}`,
-      html: `<p>Please verify your email by clicking this link: <a href="${verificationUrl}">${verificationUrl}</a></p>`,
-    });
 
     res.status(201).json({
-      message: 'User created successfully. Please check your email to verify your account.',
-      emailPreviewUrl, // For development/testing
+      message: 'User created successfully. You can now log in.',
     });
 
   } catch (error) {
@@ -86,10 +66,7 @@ router.post('/login', async (req, res) => {
 
     const user = userResult.rows[0];
 
-    // Check if verified
-    if (!user.is_verified) {
-      return res.status(403).json({ message: 'Please verify your email before logging in.' });
-    }
+    
 
     // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
@@ -112,43 +89,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// POST /api/auth/verify-email
-router.post('/verify-email', async (req, res) => {
-  try {
-    const { token } = req.body;
 
-    if (!token) {
-      return res.status(400).json({ message: 'Verification token is required.' });
-    }
-
-    // Find token
-    const tokenResult = await query('SELECT * FROM email_verification_tokens WHERE token = $1', [token]);
-    if (tokenResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Invalid or expired verification token.' });
-    }
-
-    const dbToken = tokenResult.rows[0];
-
-    // Check if expired
-    if (new Date(dbToken.expires_at) < new Date()) {
-      // Clean up expired token
-      await query('DELETE FROM email_verification_tokens WHERE token = $1', [token]);
-      return res.status(410).json({ message: 'Verification token has expired.' });
-    }
-
-    // Update user
-    await query('UPDATE users SET is_verified = true WHERE id = $1', [dbToken.user_id]);
-
-    // Delete token
-    await query('DELETE FROM email_verification_tokens WHERE token = $1', [token]);
-
-    res.status(200).json({ message: 'Email verified successfully. You can now log in.' });
-
-  } catch (error) {
-    console.error('Email Verification Error:', error);
-    res.status(500).json({ message: 'An error occurred during email verification.' });
-  }
-});
 
 // POST /api/auth/forgot-password
 router.post('/forgot-password', async (req, res) => {

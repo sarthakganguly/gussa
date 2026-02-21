@@ -32,9 +32,7 @@ export default function SignupPage() {
         throw new Error(data.message || 'An error occurred.');
       }
 
-      setSuccess(data.message);
-      // Optionally redirect after a delay
-      setTimeout(() => navigate('/login'), 5000);
+      setSuccess('Account created successfully! You can now log in.');
 
     } catch (err: any) {
       setError(err.message);
