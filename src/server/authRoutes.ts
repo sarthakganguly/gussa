@@ -1,12 +1,12 @@
 import { Router } from 'express';
-
-const router = Router();
-
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 import { query } from './db';
 import { generateRandomString } from './utils';
 import { sendEmail } from './email';
+import { config } from '../config';
 
+const router = Router();
 const BCRYPT_SALT_ROUNDS = 10;
 
 // POST /api/auth/signup
@@ -15,21 +15,22 @@ router.post('/signup', async (req, res) => {
     const { username, email, password } = req.body;
 
     if (!username || !email || !password) {
-      return res.status(400).json({ message: 'Username, email, and password are required.' });
+      return res.status(400).json({ error: 'Validation Error', message: 'Username, email, and password are required.' });
     }
 
     // Check for existing user
     const existingUser = await query('SELECT * FROM users WHERE username = $1 OR email = $2', [username, email]);
     if (existingUser.rows.length > 0) {
-      return res.status(409).json({ message: 'Username or email already exists.' });
+      const conflictField = existingUser.rows[0].username === username ? 'Username' : 'Email';
+      return res.status(409).json({ error: 'Conflict Error', message: `${conflictField} already exists.` });
     }
 
     // Hash password
     const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
-    // Create user and mark as verified
+    // Create user (no verification flow, completely free)
     await query(
-      'INSERT INTO users (username, email, password_hash, is_verified) VALUES ($1, $2, $3, true)',
+      'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3)',
       [username, email, passwordHash]
     );
 
@@ -37,13 +38,14 @@ router.post('/signup', async (req, res) => {
       message: 'User created successfully. You can now log in.',
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Signup Error:', error);
-    res.status(500).json({ message: 'An error occurred during signup.' });
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: config.debugMode ? error.message : 'An error occurred during signup.' 
+    });
   }
 });
-
-import jwt from 'jsonwebtoken';
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
@@ -51,7 +53,7 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body; // Using email or username
 
     if (!email || !password) {
-      return res.status(400).json({ message: 'Email/Username and password are required.' });
+      return res.status(400).json({ error: 'Validation Error', message: 'Email/Username and password are required.' });
     }
 
     // Find user by email or username
@@ -61,31 +63,32 @@ router.post('/login', async (req, res) => {
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(401).json({ message: 'Invalid credentials.' });
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid credentials.' });
     }
 
     const user = userResult.rows[0];
 
-    
-
     // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) {
-      return res.status(401).json({ message: 'Invalid credentials.' });
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid credentials.' });
     }
 
     // Generate JWT
     const token = jwt.sign(
       { userId: user.id, username: user.username },
-      process.env.JWT_SECRET || 'your_default_secret',
-      { expiresIn: '1d' } // Token expires in 1 day
+      config.jwtSecret,
+      { expiresIn: config.jwtExpiresIn }
     );
 
     res.status(200).json({ token, user: { id: user.id, username: user.username } });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Login Error:', error);
-    res.status(500).json({ message: 'An error occurred during login.' });
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: config.debugMode ? error.message : 'An error occurred during login.' 
+    });
   }
 });
 
@@ -96,7 +99,7 @@ router.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) {
-      return res.status(400).json({ message: 'Email address is required.' });
+      return res.status(400).json({ error: 'Validation Error', message: 'Email address is required.' });
     }
 
     const userResult = await query('SELECT * FROM users WHERE email = $1', [email]);
@@ -122,9 +125,12 @@ router.post('/forgot-password', async (req, res) => {
     // Always send a success-like message to prevent user enumeration
     res.status(200).json({ message: 'If an account with that email exists, a password reset link has been sent.' });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Forgot Password Error:', error);
-    res.status(500).json({ message: 'An error occurred.' });
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: config.debugMode ? error.message : 'An error occurred while processing password reset request.' 
+    });
   }
 });
 
@@ -133,19 +139,19 @@ router.post('/reset-password', async (req, res) => {
   try {
     const { token, password } = req.body;
     if (!token || !password) {
-      return res.status(400).json({ message: 'Token and new password are required.' });
+      return res.status(400).json({ error: 'Validation Error', message: 'Token and new password are required.' });
     }
 
     const tokenResult = await query('SELECT * FROM password_reset_tokens WHERE token = $1', [token]);
     if (tokenResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Invalid or expired password reset token.' });
+      return res.status(404).json({ error: 'Not Found', message: 'Invalid or expired password reset token.' });
     }
 
     const dbToken = tokenResult.rows[0];
 
     if (new Date(dbToken.expires_at) < new Date()) {
       await query('DELETE FROM password_reset_tokens WHERE token = $1', [token]);
-      return res.status(410).json({ message: 'Password reset token has expired.' });
+      return res.status(410).json({ error: 'Gone', message: 'Password reset token has expired.' });
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
@@ -154,9 +160,12 @@ router.post('/reset-password', async (req, res) => {
 
     res.status(200).json({ message: 'Password has been reset successfully.' });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Reset Password Error:', error);
-    res.status(500).json({ message: 'An error occurred during password reset.' });
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: config.debugMode ? error.message : 'An error occurred during password reset.' 
+    });
   }
 });
 

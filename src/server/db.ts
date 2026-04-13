@@ -23,18 +23,7 @@ export async function initializeDatabase() {
         username VARCHAR(50) UNIQUE NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
-        is_verified BOOLEAN DEFAULT false,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    // Email Verification Tokens Table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS email_verification_tokens (
-        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        token VARCHAR(255) NOT NULL,
-        expires_at TIMESTAMPTZ NOT NULL,
-        PRIMARY KEY (user_id, token)
       );
     `);
 

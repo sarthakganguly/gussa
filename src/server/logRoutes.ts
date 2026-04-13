@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthenticatedRequest } from './authMiddleware';
 import { query } from './db';
+import { config } from '../config';
 
 const router = Router();
 
@@ -17,9 +18,12 @@ router.get('/', async (req, res) => {
       [limit]
     );
     res.status(200).json(logsResult.rows);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Fetch Logs Error:', error);
-    res.status(500).json({ message: 'Failed to fetch logs.' });
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: config.debugMode ? error.message : 'Failed to fetch logs.' 
+    });
   }
 });
 
@@ -30,7 +34,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
     const userId = req.user?.userId;
 
     if (!content) {
-      return res.status(400).json({ message: 'Log content cannot be empty.' });
+      return res.status(400).json({ error: 'Validation Error', message: 'Log content cannot be empty.' });
     }
 
     const newLogResult = await query(
@@ -47,9 +51,12 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
         username: req.user?.username,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Create Log Error:', error);
-    res.status(500).json({ message: 'Failed to create log entry.' });
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: config.debugMode ? error.message : 'Failed to create log entry.' 
+    });
   }
 });
 

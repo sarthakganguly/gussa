@@ -7,7 +7,6 @@ Built with a modern technology stack and fully containerized with Docker for eas
 ## Features
 
 - **Secure User Authentication:** Complete user registration and login system.
-- **Email Verification:** Ensures users sign up with a valid email address.
 - **Password Reset:** A secure "forgot password" flow that sends a unique reset link via email.
 - **JWT-Based Sessions:** User sessions are managed securely using JSON Web Tokens.
 - **Journal Logging:** Authenticated users can create and save new journal entries.
@@ -20,7 +19,7 @@ Built with a modern technology stack and fully containerized with Docker for eas
 - **Backend:** Node.js, Express.js
 - **Database:** PostgreSQL
 - **Authentication:** bcrypt (for password hashing), JSON Web Token (JWT)
-- **Emailing:** Nodemailer (for verification and password reset emails)
+- **Emailing:** Nodemailer (for password reset emails)
 - **Containerization:** Docker, Docker Compose
 - **TypeScript:** Used across the entire stack for type safety and improved developer experience.
 
