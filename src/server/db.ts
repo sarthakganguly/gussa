@@ -14,7 +14,25 @@ const pool = new Pool({
 export const query = (text: string, params: any[]) => pool.query(text, params);
 
 export async function initializeDatabase() {
-  const client = await pool.connect();
+  let client;
+  let retries = 5;
+
+  while (retries > 0) {
+    try {
+      client = await pool.connect();
+      break; // Success!
+    } catch (err) {
+      retries -= 1;
+      console.log(`Database connection failed. Retrying... (${retries} attempts left)`);
+      if (retries === 0) {
+        console.error('Could not connect to the database after multiple attempts:', err);
+        return;
+      }
+      // Wait for 2 seconds before retrying
+      await new Promise(res => setTimeout(res, 2000));
+    }
+  }
+
   try {
     // Users Table
     await client.query(`
@@ -23,6 +41,7 @@ export async function initializeDatabase() {
         username VARCHAR(50) UNIQUE NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
+        recovery_code VARCHAR(255),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -52,6 +71,6 @@ export async function initializeDatabase() {
   } catch (err) {
     console.error('Error initializing database tables:', err);
   } finally {
-    client.release();
+    if (client) client.release();
   }
 }

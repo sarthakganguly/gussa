@@ -3,8 +3,8 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query } from './db';
 import { generateRandomString } from './utils';
-import { sendEmail } from './email';
 import { config } from '../config';
+import { authMiddleware, AuthenticatedRequest } from './authMiddleware';
 
 const router = Router();
 const BCRYPT_SALT_ROUNDS = 10;
@@ -28,14 +28,18 @@ router.post('/signup', async (req, res) => {
     // Hash password
     const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
-    // Create user (no verification flow, completely free)
+    // Generate Recovery Code (12 characters)
+    const recoveryCode = generateRandomString(12).toUpperCase();
+
+    // Create user
     await query(
-      'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3)',
-      [username, email, passwordHash]
+      'INSERT INTO users (username, email, password_hash, recovery_code) VALUES ($1, $2, $3, $4)',
+      [username, email, passwordHash, recoveryCode]
     );
 
     res.status(201).json({
-      message: 'User created successfully. You can now log in.',
+      message: 'User created successfully. Please SAVE your recovery key.',
+      recoveryCode,
     });
 
   } catch (error: any) {
@@ -50,15 +54,14 @@ router.post('/signup', async (req, res) => {
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body; // Using email or username
+    const { email, password } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Validation Error', message: 'Email/Username and password are required.' });
     }
 
-    // Find user by email or username
     const userResult = await query(
-      'SELECT * FROM users WHERE email = $1 OR username = $1',
+      'SELECT id, username, email, password_hash, recovery_code FROM users WHERE email = $1 OR username = $1',
       [email]
     );
 
@@ -68,7 +71,6 @@ router.post('/login', async (req, res) => {
 
     const user = userResult.rows[0];
 
-    // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'Unauthorized', message: 'Invalid credentials.' });
@@ -81,7 +83,14 @@ router.post('/login', async (req, res) => {
       { expiresIn: config.jwtExpiresIn }
     );
 
-    res.status(200).json({ token, user: { id: user.id, username: user.username } });
+    res.status(200).json({ 
+      token, 
+      user: { 
+        id: user.id, 
+        username: user.username,
+        recoveryCode: user.recovery_code 
+      } 
+    });
 
   } catch (error: any) {
     console.error('Login Error:', error);
@@ -92,44 +101,88 @@ router.post('/login', async (req, res) => {
   }
 });
 
-
-
-// POST /api/auth/forgot-password
-router.post('/forgot-password', async (req, res) => {
+// POST /api/auth/restore-password
+router.post('/restore-password', async (req, res) => {
   try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'Validation Error', message: 'Email address is required.' });
+    const { identifier, recoveryCode } = req.body;
+
+    if (!identifier || !recoveryCode) {
+      return res.status(400).json({ error: 'Validation Error', message: 'Username/Email and Recovery Code are required.' });
     }
 
-    const userResult = await query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userResult.rows.length > 0) {
-      const user = userResult.rows[0];
-      const resetToken = generateRandomString(32);
-      const tokenExpires = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
+    const userResult = await query(
+      'SELECT id, recovery_code FROM users WHERE email = $1 OR username = $1',
+      [identifier]
+    );
 
-      await query(
-        'INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)',
-        [user.id, resetToken, tokenExpires]
-      );
-
-      const resetUrl = `${process.env.APP_URL}/reset-password?token=${resetToken}`;
-      await sendEmail({
-        to: email,
-        subject: 'Password Reset Request',
-        text: `You requested a password reset. Click this link to reset your password: ${resetUrl}`,
-        html: `<p>You requested a password reset. Click this link to reset your password: <a href="${resetUrl}">${resetUrl}</a></p>`,
-      });
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Not Found', message: 'User not found.' });
     }
 
-    // Always send a success-like message to prevent user enumeration
-    res.status(200).json({ message: 'If an account with that email exists, a password reset link has been sent.' });
+    const user = userResult.rows[0];
+
+    if (!user.recovery_code) {
+       return res.status(400).json({ error: 'Bad Request', message: 'No recovery code set for this user.' });
+    }
+
+    if (recoveryCode.toUpperCase() !== user.recovery_code) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid recovery code.' });
+    }
+
+    // Code is valid, generate a reset token
+    const resetToken = generateRandomString(32);
+    const tokenExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    await query(
+      'INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)',
+      [user.id, resetToken, tokenExpires]
+    );
+
+    res.status(200).json({ 
+      message: 'Recovery code verified.', 
+      resetToken 
+    });
 
   } catch (error: any) {
-    console.error('Forgot Password Error:', error);
+    console.error('Restore Password Error:', error);
     res.status(500).json({ 
       error: 'Internal Server Error', 
-      message: config.debugMode ? error.message : 'An error occurred while processing password reset request.' 
+      message: config.debugMode ? error.message : 'An error occurred during restoration.' 
+    });
+  }
+});
+
+// POST /api/auth/regenerate-recovery-key
+router.post('/regenerate-recovery-key', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    const userId = req.user?.userId;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: 'Validation Error', message: 'Password is required to regenerate recovery key.' });
+    }
+
+    const userResult = await query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid password.' });
+    }
+
+    const newRecoveryCode = generateRandomString(12).toUpperCase();
+    await query('UPDATE users SET recovery_code = $1 WHERE id = $2', [newRecoveryCode, userId]);
+
+    res.status(200).json({ 
+      message: 'Recovery key regenerated successfully.', 
+      recoveryCode: newRecoveryCode 
+    });
+
+  } catch (error: any) {
+    console.error('Regenerate Key Error:', error);
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: config.debugMode ? error.message : 'An error occurred during regeneration.' 
     });
   }
 });
