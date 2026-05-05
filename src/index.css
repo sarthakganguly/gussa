@@ -1,6 +1,18 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-body {
-  @apply bg-gray-900 text-white;
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background-color: #F5F2E9; /* Soft Parchment */
+  color: #3C2F2F; /* Deep Walnut */
 }
 
+body {
+  @apply font-sans antialiased;
+}
+
+h1, h2, h3, h4 {
+  @apply font-serif;
+}
